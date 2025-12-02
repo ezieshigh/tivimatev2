@@ -1,130 +1,223 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Tv, Globe, Check, Shield, Zap, Package, Calendar as CalendarIcon, Wifi, Truck } from 'lucide-react';
+import { Tv, Globe, Check, Shield, Zap, Package, Calendar as CalendarIcon, Wifi, Truck, Clock, Gift, ChevronRight, Star } from 'lucide-react';
 import VenomOverlay from './VenomOverlay';
 import ServiceWizard, { WizardStep } from './ServiceWizard';
 import CalendarPopup from './CalendarPopup';
-import { COUNTRIES, PLANS, Country, Plan } from '../data/plans';
+import {
+  TV_COUNTRIES,
+  TV_PLANS,
+  TV_DURATION_OPTIONS,
+  STREAMING_PLANS,
+  FIRESTICKS,
+  CHRISTMAS_PROMO,
+  isChristmasPromoActive,
+  FIRESTICK_COPY,
+  TRIAL_COPY,
+  type TvCountryConfig,
+  type TvPlanId,
+  type TvDurationMonths,
+  type StreamingPlanId,
+  type FirestickId,
+} from '../data/plans';
+import {
+  computeTvQuote,
+  computeStreamingQuote,
+  mergeQuotes,
+  getDefaultMergeOptions,
+  formatCurrency,
+  type TvInput,
+  type StreamingInput,
+  type InstallationType,
+  type Quote,
+  type LineItem,
+} from '../services/pricing';
 
 // ============ TYPES ============
 
 type WizardType = 'global-tv' | 'streaming-hub' | null;
 type VenomMode = 'enter' | 'exit';
 
-// Installation options with pricing
-interface InstallationOption {
-  id: string;
-  name: string;
-  price: number;
-  description: string;
-  icon: React.ReactNode;
-  badge?: string;
-  requiresCalendar?: boolean;
-  deliveryNote?: string;
-}
-
-// Fire Stick options
-interface FireStickOption {
-  id: string;
-  name: string;
-  price: number;
-  features: string[];
-}
-
-// Duration options
-interface DurationOption {
-  months: number;
-  label: string;
-  discount?: number;
-}
-
-// Streaming HUB plan selection
-interface StreamingPlanOption {
-  planId: string;
-  name: string;
-  monthlyPrice: number;
-  features: string[];
-  badge?: string;
-}
-
-// ============ CONSTANTS ============
-
-const INSTALLATION_OPTIONS: InstallationOption[] = [
-  {
-    id: 'remote',
-    name: 'Remote Help',
-    price: 25,
-    description: 'We connect remotely and install in ~20 minutes',
-    icon: <Wifi size={24} />,
-    badge: 'Recommended'
-  },
-  {
-    id: 'callout',
-    name: 'Callout Visit',
-    price: 69.99,
-    description: '3-day response time, London area only',
-    icon: <CalendarIcon size={24} />,
-    requiresCalendar: true,
-    deliveryNote: 'London only'
-  },
-  {
-    id: 'firestick',
-    name: 'Fire Stick Bundle',
-    price: 0, // Base price, actual price depends on device
-    description: 'Pre-configured device shipped to you',
-    icon: <Truck size={24} />,
-    deliveryNote: '>7 days UK delivery'
-  }
-];
-
-const FIRESTICK_OPTIONS: FireStickOption[] = [
-  { id: 'lite', name: 'Fire TV Stick Lite', price: 59, features: ['Full HD', 'Basic remote'] },
-  { id: 'standard', name: 'Fire TV Stick', price: 74.99, features: ['Full HD', 'Voice remote'] },
-  { id: '4k', name: 'Fire TV Stick 4K', price: 84.99, features: ['4K Ultra HD', 'HDR support'] },
-  { id: '4k-max', name: 'Fire TV Stick 4K Max', price: 99.99, features: ['4K Ultra HD', 'Faster CPU', 'Wi-Fi 6E'] },
-  { id: 'cube', name: 'Fire TV Cube', price: 189.99, features: ['4K Ultra HD', 'Built-in speaker', 'Extra ports'] }
-];
-
-const DURATION_OPTIONS: DurationOption[] = [
-  { months: 1, label: '1 Month' },
-  { months: 3, label: '3 Months', discount: 5 },
-  { months: 6, label: '6 Months', discount: 10 },
-  { months: 12, label: '12 Months', discount: 15 }
-];
-
-const STREAMING_PLANS: StreamingPlanOption[] = [
-  {
-    planId: 'cinema-lite',
-    name: 'Cinema Lite',
-    monthlyPrice: 9.99,
-    features: ['1080p HD Quality', 'Cinema Releases', 'Online Support'],
-  },
-  {
-    planId: 'cinema-pro',
-    name: 'Cinema Pro',
-    monthlyPrice: 13.99,
-    features: ['4K Ultra HD', 'Cinema Releases', 'Priority Support', 'VPN Available'],
-    badge: 'Most Popular'
-  }
-];
-
 // ============ WIZARD STEPS DEFINITIONS ============
 
 const GLOBAL_TV_STEPS: WizardStep[] = [
   { id: 'country', label: 'Country' },
-  { id: 'duration', label: 'Duration' },
   { id: 'plan', label: 'Plan' },
+  { id: 'duration', label: 'Duration' },
   { id: 'installation', label: 'Installation' },
   { id: 'summary', label: 'Summary' }
 ];
 
 const STREAMING_HUB_STEPS: WizardStep[] = [
   { id: 'plan', label: 'Plan' },
-  { id: 'duration', label: 'Duration' },
+  { id: 'billing', label: 'Billing' },
   { id: 'addons', label: 'Add-ons' },
   { id: 'installation', label: 'Installation' },
   { id: 'summary', label: 'Summary' }
 ];
+
+// ============ CHRISTMAS PROMO COUNTDOWN ============
+
+const ChristmasPromoBanner: React.FC = () => {
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = new Date();
+      const end = CHRISTMAS_PROMO.endDate;
+      const diff = end.getTime() - now.getTime();
+      
+      if (diff <= 0) {
+        setTimeLeft('');
+        return;
+      }
+      
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      
+      if (days > 0) {
+        setTimeLeft(`${days}d ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+      } else {
+        setTimeLeft(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+      }
+    };
+    
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  if (!isChristmasPromoActive() || !timeLeft) return null;
+  
+  return (
+    <div className="christmas-promo-banner">
+      <div className="promo-content">
+        <Gift size={18} />
+        <span>{CHRISTMAS_PROMO.label} until 28.12: first month of TV + HUB 20% off</span>
+        <div className="promo-timer">
+          <Clock size={14} />
+          <span>Ends in: {timeLeft}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ QUOTE SUMMARY COMPONENT ============
+
+interface QuoteSummaryProps {
+  quote: Quote;
+  showRecurring?: boolean;
+}
+
+const QuoteSummary: React.FC<QuoteSummaryProps> = ({ quote, showRecurring = true }) => {
+  const dueLines = quote.lines.filter(l => l.section === 'due');
+  const recurringLines = quote.lines.filter(l => l.section === 'recurring');
+  const dueAdjustments = quote.adjustments.filter(a => a.section === 'due');
+  const recurringAdjustments = quote.adjustments.filter(a => a.section === 'recurring');
+
+  return (
+    <div className="quote-summary">
+      {/* Due Today Block */}
+      <div className="quote-block quote-block-due">
+        <h4 className="quote-block-title">
+          <span className="quote-icon">💳</span>
+          Due Today
+        </h4>
+        <div className="quote-lines">
+          {dueLines.map((line) => (
+            <div key={line.key} className="quote-line">
+              <span className="quote-line-label">{line.label}</span>
+              <span className="quote-line-amount">
+                {line.originalAmount && line.originalAmount !== line.amount ? (
+                  <>
+                    <span className="quote-original">{formatCurrency(line.originalAmount)}</span>
+                    <span className="quote-discounted">{formatCurrency(line.amount)}</span>
+                    {line.reason && <span className="quote-reason">({line.reason})</span>}
+                  </>
+                ) : (
+                  formatCurrency(line.amount)
+                )}
+              </span>
+            </div>
+          ))}
+          {dueAdjustments.map((adj) => (
+            <div key={adj.key} className="quote-line quote-adjustment">
+              <span className="quote-line-label">{adj.label}</span>
+              <span className="quote-line-amount discount">{formatCurrency(adj.amount)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="quote-total">
+          <span>Total Due Today</span>
+          <span className="quote-total-amount">{formatCurrency(quote.dueToday)}</span>
+        </div>
+      </div>
+
+      {/* Recurring Block */}
+      {showRecurring && quote.recurringMonthly > 0 && (
+        <div className="quote-block quote-block-recurring">
+          <h4 className="quote-block-title">
+            <span className="quote-icon">🔄</span>
+            Recurring
+          </h4>
+          <div className="quote-lines">
+            {recurringLines.map((line) => (
+              <div key={line.key} className="quote-line">
+                <span className="quote-line-label">{line.label}</span>
+                <span className="quote-line-amount">{formatCurrency(line.amount)}</span>
+              </div>
+            ))}
+            {recurringAdjustments.map((adj) => (
+              <div key={adj.key} className="quote-line quote-adjustment">
+                <span className="quote-line-label">{adj.label}</span>
+                <span className="quote-line-amount discount">{formatCurrency(adj.amount)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="quote-total">
+            <span>Monthly Total</span>
+            <span className="quote-total-amount">{formatCurrency(quote.recurringMonthly)}</span>
+          </div>
+          {quote.recurringLabel && (
+            <div className="quote-recurring-label">{quote.recurringLabel}</div>
+          )}
+        </div>
+      )}
+
+      {/* Trial notice */}
+      <div className="quote-trial-notice">
+        <Shield size={16} />
+        <span>{TRIAL_COPY.description}</span>
+      </div>
+    </div>
+  );
+};
+
+// ============ MINI QUOTE BAR ============
+
+interface MiniQuoteBarProps {
+  quote: Quote;
+}
+
+const MiniQuoteBar: React.FC<MiniQuoteBarProps> = ({ quote }) => {
+  return (
+    <div className="mini-quote-bar">
+      <div className="mini-quote-item">
+        <span className="mini-quote-label">Due today:</span>
+        <span className="mini-quote-amount">{formatCurrency(quote.dueToday)}</span>
+      </div>
+      {quote.recurringMonthly > 0 && (
+        <div className="mini-quote-item">
+          <span className="mini-quote-label">Later:</span>
+          <span className="mini-quote-amount">{formatCurrency(quote.recurringMonthly)}/mo</span>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ============ MAIN COMPONENT ============
 
@@ -142,18 +235,79 @@ const ServicesOverview: React.FC = () => {
   const [calloutDate, setCalloutDate] = useState<Date | null>(null);
 
   // Global TV wizard selections
-  const [selectedCountry, setSelectedCountry] = useState<Country | null>(null);
-  const [selectedDuration, setSelectedDuration] = useState<number>(1);
-  const [selectedTVPlan, setSelectedTVPlan] = useState<string>('tv-single');
-  const [selectedInstallation, setSelectedInstallation] = useState<string>('remote');
-  const [selectedFirestick, setSelectedFirestick] = useState<string>('4k');
+  const [selectedCountry, setSelectedCountry] = useState<TvCountryConfig | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState<TvDurationMonths>(1);
+  const [selectedTVPlan, setSelectedTVPlan] = useState<TvPlanId>('tv-single');
+  const [selectedTVTier, setSelectedTVTier] = useState<'lite' | 'pro'>('lite');
+  const [selectedInstallation, setSelectedInstallation] = useState<InstallationType>('remote');
+  const [selectedFirestick, setSelectedFirestick] = useState<FirestickId>('4k');
 
   // Streaming HUB wizard selections
-  const [selectedStreamingPlan, setSelectedStreamingPlan] = useState<string>('cinema-pro');
-  const [selectedStreamingDuration, setSelectedStreamingDuration] = useState<'monthly' | 'yearly'>('monthly');
+  const [selectedStreamingPlan, setSelectedStreamingPlan] = useState<StreamingPlanId>('cinema-pro');
+  const [selectedStreamingBilling, setSelectedStreamingBilling] = useState<'monthly' | 'yearly'>('monthly');
   const [vpnEnabled, setVpnEnabled] = useState(false);
-  const [streamingInstallation, setStreamingInstallation] = useState<string>('remote');
-  const [streamingFirestick, setStreamingFirestick] = useState<string>('4k');
+  const [streamingInstallation, setStreamingInstallation] = useState<InstallationType>('remote');
+  const [streamingFirestick, setStreamingFirestick] = useState<FirestickId>('4k');
+
+  // ============ COMPUTED QUOTES ============
+
+  const tvInput = useMemo((): TvInput | null => {
+    if (activeWizard !== 'global-tv' || !selectedCountry) return null;
+    
+    return {
+      planId: selectedTVPlan,
+      countryTier: selectedCountry.tier,
+      isPro: selectedTVTier === 'pro',
+      durationMonths: selectedDuration,
+      installation: {
+        type: selectedInstallation,
+        firestickId: selectedInstallation === 'firestick' ? selectedFirestick : undefined,
+      },
+    };
+  }, [activeWizard, selectedCountry, selectedTVPlan, selectedTVTier, selectedDuration, selectedInstallation, selectedFirestick]);
+
+  const streamingInput = useMemo((): StreamingInput | null => {
+    if (activeWizard !== 'streaming-hub') return null;
+    
+    const plan = STREAMING_PLANS.find(p => p.id === selectedStreamingPlan);
+    
+    return {
+      planId: selectedStreamingPlan,
+      billing: selectedStreamingBilling,
+      vpnEnabled: vpnEnabled && !(plan?.vpnIncluded),
+      installation: {
+        type: streamingInstallation,
+        firestickId: streamingInstallation === 'firestick' ? streamingFirestick : undefined,
+      },
+    };
+  }, [activeWizard, selectedStreamingPlan, selectedStreamingBilling, vpnEnabled, streamingInstallation, streamingFirestick]);
+
+  const currentQuote = useMemo((): Quote => {
+    const quotes: Quote[] = [];
+    
+    if (tvInput) {
+      try {
+        quotes.push(computeTvQuote(tvInput));
+      } catch {
+        // Plan not selected yet
+      }
+    }
+    
+    if (streamingInput) {
+      try {
+        quotes.push(computeStreamingQuote(streamingInput));
+      } catch {
+        // Plan not selected yet
+      }
+    }
+    
+    if (quotes.length === 0) {
+      return { dueToday: 0, recurringMonthly: 0, lines: [], adjustments: [] };
+    }
+    
+    const options = getDefaultMergeOptions(!!tvInput, !!streamingInput);
+    return mergeQuotes(quotes, options);
+  }, [tvInput, streamingInput]);
 
   // ============ HANDLERS ============
 
@@ -180,11 +334,12 @@ const ServicesOverview: React.FC = () => {
       setSelectedCountry(null);
       setSelectedDuration(1);
       setSelectedTVPlan('tv-single');
+      setSelectedTVTier('lite');
       setSelectedInstallation('remote');
       setCalloutDate(null);
     } else {
       setSelectedStreamingPlan('cinema-pro');
-      setSelectedStreamingDuration('monthly');
+      setSelectedStreamingBilling('monthly');
       setVpnEnabled(false);
       setStreamingInstallation('remote');
     }
@@ -195,7 +350,6 @@ const ServicesOverview: React.FC = () => {
 
   const handleCloseWizard = useCallback(() => {
     setVenomMode('exit');
-    // Venom exit animation will handle cleanup
   }, []);
 
   const handleVenomComplete = useCallback(() => {
@@ -210,89 +364,6 @@ const ServicesOverview: React.FC = () => {
     setWizardStep(index);
   }, []);
 
-  // ============ PRICE CALCULATIONS ============
-
-  const calculateGlobalTVPrice = useMemo(() => {
-    let basePrice = 0;
-    let setupFee = 49;
-    const duration = selectedDuration;
-
-    // Get plan pricing
-    const plan = PLANS.find(p => p.id === selectedTVPlan);
-    if (plan) {
-      if (selectedTVPlan === 'tv-single' && selectedCountry) {
-        basePrice = selectedCountry.tier === 'premium' 
-          ? (plan.monthlyPricePremiumCountry || 12.99)
-          : (plan.monthlyPriceStandardCountry || 9.99);
-      } else if (plan.monthlyPrice) {
-        basePrice = plan.monthlyPrice;
-      }
-    }
-
-    // Apply duration discount
-    const durationOption = DURATION_OPTIONS.find(d => d.months === duration);
-    const discount = durationOption?.discount || 0;
-    const discountedPrice = basePrice * (1 - discount / 100);
-    const totalRecurring = discountedPrice * duration;
-
-    // Installation cost
-    let installCost = 0;
-    if (selectedInstallation === 'remote') {
-      installCost = 25;
-    } else if (selectedInstallation === 'callout') {
-      installCost = 69.99;
-    } else if (selectedInstallation === 'firestick') {
-      const stick = FIRESTICK_OPTIONS.find(f => f.id === selectedFirestick);
-      installCost = stick?.price || 84.99;
-    }
-
-    return {
-      monthlyPrice: discountedPrice,
-      totalRecurring,
-      setupFee,
-      installCost,
-      discount,
-      grandTotal: totalRecurring + setupFee + installCost
-    };
-  }, [selectedCountry, selectedDuration, selectedTVPlan, selectedInstallation, selectedFirestick]);
-
-  const calculateStreamingPrice = useMemo(() => {
-    const plan = STREAMING_PLANS.find(p => p.planId === selectedStreamingPlan);
-    let monthlyPrice = plan?.monthlyPrice || 13.99;
-    const setupFee = 59;
-
-    // VPN add-on
-    const vpnCost = vpnEnabled ? 3 : 0;
-    monthlyPrice += vpnCost;
-
-    // Yearly discount
-    const isYearly = selectedStreamingDuration === 'yearly';
-    const discount = isYearly ? 15 : 0;
-    const effectiveMonthly = monthlyPrice * (1 - discount / 100);
-    const totalRecurring = isYearly ? effectiveMonthly * 12 : effectiveMonthly;
-
-    // Installation cost
-    let installCost = 0;
-    if (streamingInstallation === 'remote') {
-      installCost = 25;
-    } else if (streamingInstallation === 'callout') {
-      installCost = 69.99;
-    } else if (streamingInstallation === 'firestick') {
-      const stick = FIRESTICK_OPTIONS.find(f => f.id === streamingFirestick);
-      installCost = stick?.price || 84.99;
-    }
-
-    return {
-      monthlyPrice: effectiveMonthly,
-      totalRecurring,
-      setupFee,
-      installCost,
-      vpnCost,
-      discount,
-      grandTotal: totalRecurring + setupFee + installCost
-    };
-  }, [selectedStreamingPlan, selectedStreamingDuration, vpnEnabled, streamingInstallation, streamingFirestick]);
-
   // ============ WIZARD STEP CONTENT RENDERERS ============
 
   const renderGlobalTVStep = () => {
@@ -304,15 +375,15 @@ const ServicesOverview: React.FC = () => {
             <p className="wizard-step-desc">Choose the country whose TV channels you want to access</p>
             
             <div className="wizard-country-grid">
-              {COUNTRIES.map((country) => (
+              {TV_COUNTRIES.map((country) => (
                 <button
-                  key={country.id}
-                  className={`wizard-country-tile ${selectedCountry?.id === country.id ? 'selected' : ''} ${country.tier}`}
+                  key={country.code}
+                  className={`wizard-country-tile ${selectedCountry?.code === country.code ? 'selected' : ''} ${country.tier}`}
                   onClick={() => setSelectedCountry(country)}
                 >
                   <span className="wizard-country-flag">{country.flag}</span>
                   <span className="wizard-country-name">{country.name}</span>
-                  {country.tier === 'premium' && (
+                  {country.tier === 'rich' && (
                     <span className="wizard-country-badge">Premium</span>
                   )}
                 </button>
@@ -321,76 +392,88 @@ const ServicesOverview: React.FC = () => {
 
             <div className="wizard-tier-legend">
               <span className="wizard-legend-item">
-                <span className="wizard-legend-dot premium" /> Premium (£12.99/mo)
+                <span className="wizard-legend-dot premium" /> Premium (£13.99-16.99/mo)
               </span>
               <span className="wizard-legend-item">
-                <span className="wizard-legend-dot standard" /> Standard (£9.99/mo)
+                <span className="wizard-legend-dot standard" /> Standard (£11.99-14.99/mo)
               </span>
             </div>
           </div>
         );
 
-      case 1: // Duration Selection
+      case 1: // Plan Type Selection (Lite/Pro)
+        return (
+          <div className="wizard-step-plan-type">
+            <h3 className="wizard-step-title">Choose Lite or Pro</h3>
+            <p className="wizard-step-desc">Select your service level</p>
+
+            <div className="wizard-plan-type-grid">
+              {/* Lite */}
+              <button
+                className={`wizard-plan-type-card ${selectedTVTier === 'lite' ? 'selected' : ''}`}
+                onClick={() => setSelectedTVTier('lite')}
+              >
+                <div className="plan-type-header">
+                  <span className="plan-type-name">TV Global Lite</span>
+                </div>
+                <div className="plan-type-price">
+                  <span className="plan-type-amount">
+                    {selectedCountry?.tier === 'cheap' ? '£11.99' : '£13.99'}
+                  </span>
+                  <span className="plan-type-period">/month</span>
+                </div>
+                <ul className="plan-type-features">
+                  <li><Check size={14} /> Live HD Channels</li>
+                  <li><Check size={14} /> Catch-up TV</li>
+                  <li><Check size={14} /> Standard Support</li>
+                </ul>
+              </button>
+
+              {/* Pro */}
+              <button
+                className={`wizard-plan-type-card ${selectedTVTier === 'pro' ? 'selected' : ''}`}
+                onClick={() => setSelectedTVTier('pro')}
+              >
+                <div className="plan-type-header">
+                  <span className="plan-type-name">TV Global Pro</span>
+                  <span className="plan-type-badge">Recommended</span>
+                </div>
+                <div className="plan-type-price">
+                  <span className="plan-type-amount">
+                    {selectedCountry?.tier === 'cheap' ? '£14.99' : '£16.99'}
+                  </span>
+                  <span className="plan-type-period">/month</span>
+                </div>
+                <ul className="plan-type-features">
+                  <li><Check size={14} /> Live HD + 4K Channels</li>
+                  <li><Check size={14} /> Full Catch-up Library</li>
+                  <li><Check size={14} /> Premium Sports Package</li>
+                  <li><Check size={14} /> Priority Support</li>
+                </ul>
+              </button>
+            </div>
+          </div>
+        );
+
+      case 2: // Duration Selection
         return (
           <div className="wizard-step-duration">
             <h3 className="wizard-step-title">Subscription Duration</h3>
             <p className="wizard-step-desc">Longer commitments = bigger savings</p>
 
             <div className="wizard-duration-grid">
-              {DURATION_OPTIONS.map((option) => (
+              {TV_DURATION_OPTIONS.map((option) => (
                 <button
                   key={option.months}
                   className={`wizard-duration-card ${selectedDuration === option.months ? 'selected' : ''}`}
                   onClick={() => setSelectedDuration(option.months)}
                 >
                   <span className="wizard-duration-label">{option.label}</span>
-                  {option.discount && (
+                  {option.discount > 0 && (
                     <span className="wizard-duration-badge">Save {option.discount}%</span>
                   )}
                 </button>
               ))}
-            </div>
-          </div>
-        );
-
-      case 2: // TV Plan Selection
-        return (
-          <div className="wizard-step-plan">
-            <h3 className="wizard-step-title">Choose Your Plan</h3>
-            <p className="wizard-step-desc">Based on your selection, we recommend the best value</p>
-
-            <div className="wizard-plan-grid">
-              {PLANS.filter(p => p.category === 'tv').map((plan) => {
-                const isSelected = selectedTVPlan === plan.id;
-                const price = plan.monthlyPrice || 
-                  (selectedCountry?.tier === 'premium' ? plan.monthlyPricePremiumCountry : plan.monthlyPriceStandardCountry) || 
-                  9.99;
-
-                return (
-                  <button
-                    key={plan.id}
-                    className={`wizard-plan-card ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedTVPlan(plan.id)}
-                  >
-                    <div className="wizard-plan-header">
-                      <span className="wizard-plan-name">{plan.name}</span>
-                      {plan.badge && (
-                        <span className="wizard-plan-badge">{plan.badge.replace('-', ' ')}</span>
-                      )}
-                    </div>
-                    <p className="wizard-plan-tagline">{plan.tagline}</p>
-                    <div className="wizard-plan-price">
-                      <span className="wizard-plan-amount">£{price.toFixed(2)}</span>
-                      <span className="wizard-plan-period">/month</span>
-                    </div>
-                    <ul className="wizard-plan-features">
-                      {plan.features.slice(0, 3).map((feature, i) => (
-                        <li key={i}><Check size={14} /> {feature}</li>
-                      ))}
-                    </ul>
-                  </button>
-                );
-              })}
             </div>
           </div>
         );
@@ -400,8 +483,7 @@ const ServicesOverview: React.FC = () => {
           selectedInstallation,
           setSelectedInstallation,
           selectedFirestick,
-          setSelectedFirestick,
-          'Both Global TV and Streaming HUB can be installed for these prices.'
+          setSelectedFirestick
         );
 
       case 4: // Summary
@@ -409,62 +491,30 @@ const ServicesOverview: React.FC = () => {
           <div className="wizard-step-summary">
             <h3 className="wizard-step-title">Order Summary</h3>
             
-            <div className="wizard-summary-card">
-              <div className="wizard-summary-section">
-                <h4>Global TV Subscription</h4>
-                <div className="wizard-summary-row">
-                  <span>{selectedCountry?.name || 'Country'}</span>
-                  <span>{selectedCountry?.tier === 'premium' ? 'Premium' : 'Standard'}</span>
-                </div>
-                <div className="wizard-summary-row">
-                  <span>Plan</span>
-                  <span>{PLANS.find(p => p.id === selectedTVPlan)?.name}</span>
-                </div>
-                <div className="wizard-summary-row">
-                  <span>Duration</span>
-                  <span>{selectedDuration} month{selectedDuration > 1 ? 's' : ''}</span>
-                </div>
+            <div className="wizard-summary-details">
+              <div className="summary-row">
+                <span className="summary-label">Country</span>
+                <span className="summary-value">{selectedCountry?.flag} {selectedCountry?.name}</span>
               </div>
-
-              <div className="wizard-summary-section">
-                <h4>Installation</h4>
-                <div className="wizard-summary-row">
-                  <span>{INSTALLATION_OPTIONS.find(i => i.id === selectedInstallation)?.name}</span>
-                  <span>£{calculateGlobalTVPrice.installCost.toFixed(2)}</span>
-                </div>
-                {selectedInstallation === 'firestick' && (
-                  <div className="wizard-summary-row sub">
-                    <span>{FIRESTICK_OPTIONS.find(f => f.id === selectedFirestick)?.name}</span>
-                  </div>
-                )}
-                {selectedInstallation === 'callout' && calloutDate && (
-                  <div className="wizard-summary-row sub">
-                    <span>Scheduled: {calloutDate.toLocaleDateString()}</span>
-                  </div>
-                )}
+              <div className="summary-row">
+                <span className="summary-label">Plan</span>
+                <span className="summary-value">TV Global {selectedTVTier === 'pro' ? 'Pro' : 'Lite'}</span>
               </div>
-
-              <div className="wizard-summary-totals">
-                <div className="wizard-summary-row">
-                  <span>Setup Fee</span>
-                  <span>£{calculateGlobalTVPrice.setupFee.toFixed(2)}</span>
-                </div>
-                <div className="wizard-summary-row">
-                  <span>Subscription ({selectedDuration}mo @ £{calculateGlobalTVPrice.monthlyPrice.toFixed(2)}/mo)</span>
-                  <span>£{calculateGlobalTVPrice.totalRecurring.toFixed(2)}</span>
-                </div>
-                {calculateGlobalTVPrice.discount > 0 && (
-                  <div className="wizard-summary-row discount">
-                    <span>Discount Applied</span>
-                    <span>-{calculateGlobalTVPrice.discount}%</span>
-                  </div>
-                )}
-                <div className="wizard-summary-row total">
-                  <span>Total Due Today</span>
-                  <span>£{calculateGlobalTVPrice.grandTotal.toFixed(2)}</span>
-                </div>
+              <div className="summary-row">
+                <span className="summary-label">Duration</span>
+                <span className="summary-value">{selectedDuration} month{selectedDuration > 1 ? 's' : ''}</span>
+              </div>
+              <div className="summary-row">
+                <span className="summary-label">Installation</span>
+                <span className="summary-value">
+                  {selectedInstallation === 'remote' ? 'Remote Help' : 
+                   selectedInstallation === 'callout' ? 'Callout Visit' : 
+                   FIRESTICKS.find(f => f.id === selectedFirestick)?.label}
+                </span>
               </div>
             </div>
+
+            <QuoteSummary quote={currentQuote} />
           </div>
         );
 
@@ -474,6 +524,8 @@ const ServicesOverview: React.FC = () => {
   };
 
   const renderStreamingHubStep = () => {
+    const currentPlan = STREAMING_PLANS.find(p => p.id === selectedStreamingPlan);
+    
     switch (wizardStep) {
       case 0: // Plan Selection
         return (
@@ -484,52 +536,68 @@ const ServicesOverview: React.FC = () => {
             <div className="wizard-streaming-plan-grid">
               {STREAMING_PLANS.map((plan) => (
                 <button
-                  key={plan.planId}
-                  className={`wizard-streaming-card ${selectedStreamingPlan === plan.planId ? 'selected' : ''}`}
-                  onClick={() => setSelectedStreamingPlan(plan.planId)}
+                  key={plan.id}
+                  className={`wizard-streaming-card ${selectedStreamingPlan === plan.id ? 'selected' : ''}`}
+                  onClick={() => setSelectedStreamingPlan(plan.id)}
                 >
                   {plan.badge && (
-                    <span className="wizard-streaming-badge">{plan.badge}</span>
+                    <span className="wizard-streaming-badge">
+                      <Star size={12} /> {plan.badge}
+                    </span>
                   )}
-                  <h4 className="wizard-streaming-name">{plan.name}</h4>
+                  <h4 className="wizard-streaming-name">{plan.label}</h4>
                   <div className="wizard-streaming-price">
                     <span className="wizard-streaming-amount">£{plan.monthlyPrice.toFixed(2)}</span>
                     <span className="wizard-streaming-period">/month</span>
                   </div>
+                  <p className="wizard-streaming-support">{plan.supportLevel}</p>
                   <ul className="wizard-streaming-features">
-                    {plan.features.map((feature, i) => (
+                    {plan.features.slice(0, 4).map((feature, i) => (
                       <li key={i}><Check size={14} /> {feature}</li>
                     ))}
                   </ul>
+                  {plan.id === 'cinema-pro' && (
+                    <div className="wizard-streaming-highlight">
+                      Recommended for families and expats
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
           </div>
         );
 
-      case 1: // Duration
+      case 1: // Billing Period
         return (
           <div className="wizard-step-streaming-duration">
             <h3 className="wizard-step-title">Billing Period</h3>
-            <p className="wizard-step-desc">Save 15% with annual billing</p>
+            <p className="wizard-step-desc">Save with annual billing</p>
 
             <div className="wizard-billing-toggle">
               <button
-                className={`wizard-billing-option ${selectedStreamingDuration === 'monthly' ? 'selected' : ''}`}
-                onClick={() => setSelectedStreamingDuration('monthly')}
+                className={`wizard-billing-option ${selectedStreamingBilling === 'monthly' ? 'selected' : ''}`}
+                onClick={() => setSelectedStreamingBilling('monthly')}
               >
                 <span className="wizard-billing-label">Monthly</span>
-                <span className="wizard-billing-price">£{(STREAMING_PLANS.find(p => p.planId === selectedStreamingPlan)?.monthlyPrice || 13.99).toFixed(2)}/mo</span>
+                <span className="wizard-billing-price">
+                  £{currentPlan?.monthlyPrice.toFixed(2)}/mo
+                </span>
+                <span className="wizard-billing-desc">Flexible, cancel anytime</span>
               </button>
               <button
-                className={`wizard-billing-option ${selectedStreamingDuration === 'yearly' ? 'selected' : ''}`}
-                onClick={() => setSelectedStreamingDuration('yearly')}
+                className={`wizard-billing-option ${selectedStreamingBilling === 'yearly' ? 'selected' : ''}`}
+                onClick={() => setSelectedStreamingBilling('yearly')}
               >
                 <span className="wizard-billing-label">Yearly</span>
                 <span className="wizard-billing-price">
-                  £{((STREAMING_PLANS.find(p => p.planId === selectedStreamingPlan)?.monthlyPrice || 13.99) * 0.85 * 12).toFixed(2)}/yr
+                  £{currentPlan?.yearlyPrice.toFixed(2)}/yr
                 </span>
-                <span className="wizard-billing-badge">Save 15%</span>
+                <span className="wizard-billing-desc">
+                  ~£{((currentPlan?.yearlyPrice ?? 0) / 12).toFixed(2)}/mo equivalent
+                </span>
+                <span className="wizard-billing-badge">
+                  Save £{(((currentPlan?.monthlyPrice ?? 0) * 12) - (currentPlan?.yearlyPrice ?? 0)).toFixed(2)}
+                </span>
               </button>
             </div>
           </div>
@@ -541,31 +609,42 @@ const ServicesOverview: React.FC = () => {
             <h3 className="wizard-step-title">Privacy Add-ons</h3>
             <p className="wizard-step-desc">Enhance your streaming experience</p>
 
-            <div className="wizard-addon-card">
-              <div className="wizard-addon-header">
-                <Shield size={24} />
-                <div className="wizard-addon-info">
-                  <h4>VPN Privacy Protection</h4>
-                  <p>Secure your connection and access content anywhere</p>
+            {currentPlan?.vpnIncluded ? (
+              <div className="wizard-addon-included">
+                <Shield size={24} className="addon-included-icon" />
+                <div className="addon-included-content">
+                  <h4>VPN Privacy Protection Included</h4>
+                  <p>Your Cinema Pro plan includes VPN – secure connection to UK/PL from anywhere in the world</p>
                 </div>
-                <div className="wizard-addon-price">+£3.00/mo</div>
+                <Check size={24} className="addon-included-check" />
               </div>
-              
-              <button
-                className={`wizard-addon-toggle ${vpnEnabled ? 'enabled' : ''}`}
-                onClick={() => setVpnEnabled(!vpnEnabled)}
-              >
-                <span className="wizard-toggle-track">
-                  <span className="wizard-toggle-thumb" />
-                </span>
-                <span className="wizard-toggle-label">{vpnEnabled ? 'Enabled' : 'Disabled'}</span>
-              </button>
+            ) : (
+              <div className="wizard-addon-card">
+                <div className="wizard-addon-header">
+                  <Shield size={24} />
+                  <div className="wizard-addon-info">
+                    <h4>VPN Privacy Protection</h4>
+                    <p>Secure your connection and access content anywhere</p>
+                  </div>
+                  <div className="wizard-addon-price">+£2.99/mo</div>
+                </div>
+                
+                <button
+                  className={`wizard-addon-toggle ${vpnEnabled ? 'enabled' : ''}`}
+                  onClick={() => setVpnEnabled(!vpnEnabled)}
+                >
+                  <span className="wizard-toggle-track">
+                    <span className="wizard-toggle-thumb" />
+                  </span>
+                  <span className="wizard-toggle-label">{vpnEnabled ? 'Enabled' : 'Disabled'}</span>
+                </button>
 
-              <div className="wizard-addon-recommendation">
-                <Zap size={16} />
-                <span>We strongly recommend enabling VPN for uninterrupted streaming</span>
+                <div className="wizard-addon-recommendation">
+                  <Zap size={16} />
+                  <span>We strongly recommend enabling VPN for uninterrupted streaming</span>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         );
 
@@ -574,8 +653,7 @@ const ServicesOverview: React.FC = () => {
           streamingInstallation,
           setStreamingInstallation,
           streamingFirestick,
-          setStreamingFirestick,
-          'Both Global TV and Streaming HUB can be installed for these prices.'
+          setStreamingFirestick
         );
 
       case 4: // Summary
@@ -583,61 +661,32 @@ const ServicesOverview: React.FC = () => {
           <div className="wizard-step-summary">
             <h3 className="wizard-step-title">Order Summary</h3>
             
-            <div className="wizard-summary-card">
-              <div className="wizard-summary-section">
-                <h4>Streaming HUB Subscription</h4>
-                <div className="wizard-summary-row">
-                  <span>Plan</span>
-                  <span>{STREAMING_PLANS.find(p => p.planId === selectedStreamingPlan)?.name}</span>
-                </div>
-                <div className="wizard-summary-row">
-                  <span>Billing</span>
-                  <span>{selectedStreamingDuration === 'yearly' ? 'Annual' : 'Monthly'}</span>
-                </div>
-                {vpnEnabled && (
-                  <div className="wizard-summary-row">
-                    <span>VPN Privacy</span>
-                    <span>+£3.00/mo</span>
-                  </div>
-                )}
+            <div className="wizard-summary-details">
+              <div className="summary-row">
+                <span className="summary-label">Plan</span>
+                <span className="summary-value">{currentPlan?.label}</span>
               </div>
-
-              <div className="wizard-summary-section">
-                <h4>Installation</h4>
-                <div className="wizard-summary-row">
-                  <span>{INSTALLATION_OPTIONS.find(i => i.id === streamingInstallation)?.name}</span>
-                  <span>£{calculateStreamingPrice.installCost.toFixed(2)}</span>
-                </div>
-                {streamingInstallation === 'firestick' && (
-                  <div className="wizard-summary-row sub">
-                    <span>{FIRESTICK_OPTIONS.find(f => f.id === streamingFirestick)?.name}</span>
-                  </div>
-                )}
+              <div className="summary-row">
+                <span className="summary-label">Billing</span>
+                <span className="summary-value">{selectedStreamingBilling === 'yearly' ? 'Annual' : 'Monthly'}</span>
               </div>
-
-              <div className="wizard-summary-totals">
-                <div className="wizard-summary-row">
-                  <span>Setup Fee</span>
-                  <span>£{calculateStreamingPrice.setupFee.toFixed(2)}</span>
+              {!currentPlan?.vpnIncluded && (
+                <div className="summary-row">
+                  <span className="summary-label">VPN Add-on</span>
+                  <span className="summary-value">{vpnEnabled ? 'Yes (+£2.99/mo)' : 'No'}</span>
                 </div>
-                <div className="wizard-summary-row">
-                  <span>
-                    Subscription ({selectedStreamingDuration === 'yearly' ? '12mo' : '1mo'} @ £{calculateStreamingPrice.monthlyPrice.toFixed(2)}/mo)
-                  </span>
-                  <span>£{calculateStreamingPrice.totalRecurring.toFixed(2)}</span>
-                </div>
-                {calculateStreamingPrice.discount > 0 && (
-                  <div className="wizard-summary-row discount">
-                    <span>Annual Discount</span>
-                    <span>-{calculateStreamingPrice.discount}%</span>
-                  </div>
-                )}
-                <div className="wizard-summary-row total">
-                  <span>Total Due Today</span>
-                  <span>£{calculateStreamingPrice.grandTotal.toFixed(2)}</span>
-                </div>
+              )}
+              <div className="summary-row">
+                <span className="summary-label">Installation</span>
+                <span className="summary-value">
+                  {streamingInstallation === 'remote' ? 'Remote Help' : 
+                   streamingInstallation === 'callout' ? 'Callout Visit' : 
+                   FIRESTICKS.find(f => f.id === streamingFirestick)?.label}
+                </span>
               </div>
             </div>
+
+            <QuoteSummary quote={currentQuote} />
           </div>
         );
 
@@ -648,45 +697,68 @@ const ServicesOverview: React.FC = () => {
 
   // Shared installation step renderer
   const renderInstallationStep = (
-    selectedOption: string,
-    setSelectedOption: (id: string) => void,
-    selectedStick: string,
-    setSelectedStick: (id: string) => void,
-    note: string
+    selectedOption: InstallationType,
+    setSelectedOption: (id: InstallationType) => void,
+    selectedStick: FirestickId,
+    setSelectedStick: (id: FirestickId) => void
   ) => (
     <div className="wizard-step-installation">
       <h3 className="wizard-step-title">Installation Method</h3>
       <p className="wizard-step-desc">Choose how you'd like to get set up</p>
 
       <div className="wizard-install-grid">
-        {INSTALLATION_OPTIONS.map((option) => (
-          <button
-            key={option.id}
-            className={`wizard-install-card ${selectedOption === option.id ? 'selected' : ''}`}
-            onClick={() => {
-              setSelectedOption(option.id);
-              if (option.id === 'callout') {
-                setCalendarOpen(true);
-              }
-            }}
-          >
-            <div className="wizard-install-icon">{option.icon}</div>
-            <div className="wizard-install-content">
-              <span className="wizard-install-name">{option.name}</span>
-              <span className="wizard-install-desc">{option.description}</span>
-              {option.deliveryNote && (
-                <span className="wizard-install-note">{option.deliveryNote}</span>
-              )}
-            </div>
-            <div className="wizard-install-price">
-              {option.id === 'firestick' ? 'from £59' : `£${option.price.toFixed(2)}`}
-            </div>
-            {option.badge && (
-              <span className="wizard-install-badge">{option.badge}</span>
-            )}
-          </button>
-        ))}
+        {/* Remote */}
+        <button
+          className={`wizard-install-card ${selectedOption === 'remote' ? 'selected' : ''}`}
+          onClick={() => setSelectedOption('remote')}
+        >
+          <div className="wizard-install-icon"><Wifi size={24} /></div>
+          <div className="wizard-install-content">
+            <span className="wizard-install-name">Remote Help</span>
+            <span className="wizard-install-desc">We connect remotely and install in ~20 minutes</span>
+          </div>
+          <div className="wizard-install-price">£30.00</div>
+          <span className="wizard-install-badge">Recommended</span>
+        </button>
+
+        {/* Firestick */}
+        <button
+          className={`wizard-install-card ${selectedOption === 'firestick' ? 'selected' : ''}`}
+          onClick={() => setSelectedOption('firestick')}
+        >
+          <div className="wizard-install-icon"><Truck size={24} /></div>
+          <div className="wizard-install-content">
+            <span className="wizard-install-name">Firestick Plug & Play</span>
+            <span className="wizard-install-desc">{FIRESTICK_COPY.recommendation}</span>
+            <span className="wizard-install-note">&gt;7 days UK delivery</span>
+          </div>
+          <div className="wizard-install-price">from £74.99</div>
+        </button>
+
+        {/* Callout */}
+        <button
+          className={`wizard-install-card ${selectedOption === 'callout' ? 'selected' : ''}`}
+          onClick={() => {
+            setSelectedOption('callout');
+            setCalendarOpen(true);
+          }}
+        >
+          <div className="wizard-install-icon"><CalendarIcon size={24} /></div>
+          <div className="wizard-install-content">
+            <span className="wizard-install-name">Callout Visit</span>
+            <span className="wizard-install-desc">{FIRESTICK_COPY.calloutNote}</span>
+            <span className="wizard-install-note">London area only</span>
+          </div>
+          <div className="wizard-install-price">£69.00</div>
+        </button>
       </div>
+
+      {/* Firestick description */}
+      {selectedOption === 'firestick' && (
+        <div className="wizard-firestick-info">
+          <p>{FIRESTICK_COPY.description}</p>
+        </div>
+      )}
 
       {/* Fire Stick selection */}
       <AnimatePresence>
@@ -702,13 +774,15 @@ const ServicesOverview: React.FC = () => {
               <Package size={18} /> Select Your Fire Stick
             </h4>
             <div className="wizard-firestick-grid">
-              {FIRESTICK_OPTIONS.map((stick) => (
+              {FIRESTICKS.map((stick) => (
                 <button
                   key={stick.id}
-                  className={`wizard-firestick-card ${selectedStick === stick.id ? 'selected' : ''}`}
+                  className={`wizard-firestick-card ${selectedStick === stick.id ? 'selected' : ''} ${stick.recommended ? 'recommended' : ''}`}
                   onClick={() => setSelectedStick(stick.id)}
                 >
-                  <span className="wizard-firestick-name">{stick.name}</span>
+                  {stick.recommended && <span className="firestick-recommended-badge">Popular</span>}
+                  <span className="wizard-firestick-name">{stick.label}</span>
+                  <span className="wizard-firestick-desc">{stick.description}</span>
                   <span className="wizard-firestick-price">£{stick.price.toFixed(2)}</span>
                   <ul className="wizard-firestick-features">
                     {stick.features.map((f, i) => (
@@ -735,8 +809,6 @@ const ServicesOverview: React.FC = () => {
           <button onClick={() => setCalendarOpen(true)}>Change</button>
         </div>
       )}
-
-      <p className="wizard-install-note-text">{note}</p>
     </div>
   );
 
@@ -746,23 +818,23 @@ const ServicesOverview: React.FC = () => {
     if (activeWizard === 'global-tv') {
       switch (wizardStep) {
         case 0: return selectedCountry !== null;
-        case 1: return selectedDuration > 0;
-        case 2: return selectedTVPlan !== '';
+        case 1: return true; // Lite/Pro always has a selection
+        case 2: return selectedDuration > 0;
         case 3: 
           if (selectedInstallation === 'callout') return calloutDate !== null;
-          if (selectedInstallation === 'firestick') return selectedFirestick !== '';
+          if (selectedInstallation === 'firestick') return selectedFirestick !== undefined;
           return true;
         case 4: return true;
         default: return true;
       }
     } else if (activeWizard === 'streaming-hub') {
       switch (wizardStep) {
-        case 0: return selectedStreamingPlan !== '';
+        case 0: return selectedStreamingPlan !== undefined;
         case 1: return true;
         case 2: return true;
         case 3:
           if (streamingInstallation === 'callout') return calloutDate !== null;
-          if (streamingInstallation === 'firestick') return streamingFirestick !== '';
+          if (streamingInstallation === 'firestick') return streamingFirestick !== undefined;
           return true;
         case 4: return true;
         default: return true;
@@ -770,7 +842,7 @@ const ServicesOverview: React.FC = () => {
     }
     return true;
   }, [
-    activeWizard, wizardStep, selectedCountry, selectedDuration, selectedTVPlan,
+    activeWizard, wizardStep, selectedCountry, selectedDuration,
     selectedInstallation, calloutDate, selectedFirestick, selectedStreamingPlan,
     streamingInstallation, streamingFirestick
   ]);
@@ -782,21 +854,20 @@ const ServicesOverview: React.FC = () => {
     // Here you would add to cart
     console.log('Adding to cart:', {
       wizard: activeWizard,
+      quote: currentQuote,
       ...(activeWizard === 'global-tv' ? {
         country: selectedCountry,
         duration: selectedDuration,
-        plan: selectedTVPlan,
+        tier: selectedTVTier,
         installation: selectedInstallation,
         firestick: selectedInstallation === 'firestick' ? selectedFirestick : null,
         calloutDate: selectedInstallation === 'callout' ? calloutDate : null,
-        total: calculateGlobalTVPrice.grandTotal
       } : {
         plan: selectedStreamingPlan,
-        duration: selectedStreamingDuration,
+        billing: selectedStreamingBilling,
         vpn: vpnEnabled,
         installation: streamingInstallation,
         firestick: streamingInstallation === 'firestick' ? streamingFirestick : null,
-        total: calculateStreamingPrice.grandTotal
       })
     });
     handleCloseWizard();
@@ -807,6 +878,9 @@ const ServicesOverview: React.FC = () => {
   return (
     <section id="services" className="section">
       <div className="container">
+        {/* Christmas Promo Banner */}
+        <ChristmasPromoBanner />
+        
         <h2 className="section-title">Two Powerful Solutions</h2>
         <p className="section-subtitle">Choose the perfect setup for your entertainment needs.</p>
 
@@ -856,6 +930,11 @@ const ServicesOverview: React.FC = () => {
               <p className="glitch-text-item" style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', flex: 1 }}>
                 Aggregate all your favorite platforms into one seamless interface. No more switching apps.
               </p>
+              <div className="card-price-preview">
+                <span className="price-from">from</span>
+                <span className="price-amount">£{STREAMING_PLANS[0].monthlyPrice.toFixed(2)}</span>
+                <span className="price-period">/month</span>
+              </div>
               <ul style={{ listStyle: 'none', marginBottom: '2rem', color: '#ccc' }}>
                 <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ All platforms in one interface</li>
                 <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ New cinema releases included</li>
@@ -865,7 +944,8 @@ const ServicesOverview: React.FC = () => {
                 onClick={(e) => handleBuyClick('streaming-hub', e)} 
                 className="hack-button"
               >
-                <span>Buy Now</span>
+                <span>Configure & Buy</span>
+                <ChevronRight size={18} />
               </button>
             </div>
           </motion.div>
@@ -911,8 +991,13 @@ const ServicesOverview: React.FC = () => {
               <p className="glitch-text-item" style={{ color: 'var(--text-secondary)', marginBottom: '1.5rem', flex: 1 }}>
                 Watch live TV from your home country. Perfect for expats living abroad.
               </p>
+              <div className="card-price-preview">
+                <span className="price-from">from</span>
+                <span className="price-amount">£{TV_PLANS[0].cheapMonthlyLite.toFixed(2)}</span>
+                <span className="price-period">/month</span>
+              </div>
               <ul style={{ listStyle: 'none', marginBottom: '2rem', color: '#ccc' }}>
-                <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ Access 25+ countries</li>
+                <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ Access 15+ countries</li>
                 <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ Premium sports & news channels</li>
                 <li className="glitch-text-item" style={{ marginBottom: '0.5rem' }}>✓ Reliable HD streams</li>
               </ul>
@@ -920,7 +1005,8 @@ const ServicesOverview: React.FC = () => {
                 onClick={(e) => handleBuyClick('global-tv', e)} 
                 className="hack-button"
               >
-                <span>Buy Now</span>
+                <span>Configure & Buy</span>
+                <ChevronRight size={18} />
               </button>
             </div>
           </motion.div>
@@ -950,6 +1036,11 @@ const ServicesOverview: React.FC = () => {
               isLastStep={isLastStep}
               accentColor={activeWizard === 'global-tv' ? 'cyan' : 'red'}
             >
+              {/* Mini Quote Bar */}
+              {wizardStep > 0 && wizardStep < currentSteps.length - 1 && (
+                <MiniQuoteBar quote={currentQuote} />
+              )}
+              
               {activeWizard === 'global-tv' ? renderGlobalTVStep() : renderStreamingHubStep()}
             </ServiceWizard>
           </VenomOverlay>
@@ -964,6 +1055,448 @@ const ServicesOverview: React.FC = () => {
         onDateChange={setCalloutDate}
         minDaysFromNow={3}
       />
+
+      {/* Additional CSS for new components */}
+      <style jsx global>{`
+        /* Christmas Promo Banner */
+        .christmas-promo-banner {
+          background: linear-gradient(135deg, #1a472a 0%, #2d5a3d 50%, #1a472a 100%);
+          border: 1px solid #3d7a4d;
+          border-radius: 8px;
+          padding: 12px 20px;
+          margin-bottom: 2rem;
+          box-shadow: 0 4px 20px rgba(45, 90, 61, 0.3);
+        }
+        
+        .promo-content {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          color: #e8f5e9;
+          font-size: 0.95rem;
+        }
+        
+        .promo-timer {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: rgba(255, 255, 255, 0.1);
+          padding: 4px 12px;
+          border-radius: 4px;
+          font-family: monospace;
+          font-weight: bold;
+        }
+
+        /* Card Price Preview */
+        .card-price-preview {
+          display: flex;
+          align-items: baseline;
+          gap: 4px;
+          margin-bottom: 1rem;
+        }
+        
+        .price-from {
+          color: #888;
+          font-size: 0.85rem;
+        }
+        
+        .price-amount {
+          font-size: 1.75rem;
+          font-weight: bold;
+          color: white;
+          font-family: var(--font-heading);
+        }
+        
+        .price-period {
+          color: #888;
+          font-size: 0.9rem;
+        }
+
+        /* Quote Summary */
+        .quote-summary {
+          margin-top: 1.5rem;
+        }
+        
+        .quote-block {
+          background: rgba(0, 0, 0, 0.3);
+          border: 1px solid #333;
+          border-radius: 8px;
+          padding: 1.25rem;
+          margin-bottom: 1rem;
+        }
+        
+        .quote-block-due {
+          border-color: var(--accent-red);
+        }
+        
+        .quote-block-recurring {
+          border-color: #4fb7b3;
+        }
+        
+        .quote-block-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 1rem;
+          font-weight: 600;
+          margin-bottom: 1rem;
+          color: white;
+        }
+        
+        .quote-icon {
+          font-size: 1.2rem;
+        }
+        
+        .quote-lines {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin-bottom: 1rem;
+          padding-bottom: 1rem;
+          border-bottom: 1px solid #333;
+        }
+        
+        .quote-line {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          font-size: 0.9rem;
+          color: #ccc;
+        }
+        
+        .quote-line-label {
+          flex: 1;
+        }
+        
+        .quote-line-amount {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 6px;
+          text-align: right;
+        }
+        
+        .quote-original {
+          text-decoration: line-through;
+          color: #666;
+        }
+        
+        .quote-discounted {
+          color: #4fb7b3;
+          font-weight: 600;
+        }
+        
+        .quote-reason {
+          font-size: 0.75rem;
+          color: #4fb7b3;
+          background: rgba(79, 183, 179, 0.1);
+          padding: 2px 6px;
+          border-radius: 3px;
+        }
+        
+        .quote-adjustment {
+          color: #4fb7b3;
+        }
+        
+        .quote-adjustment .discount {
+          color: #4fb7b3;
+        }
+        
+        .quote-total {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 1.1rem;
+          font-weight: 600;
+          color: white;
+        }
+        
+        .quote-total-amount {
+          font-family: var(--font-heading);
+          font-size: 1.3rem;
+        }
+        
+        .quote-recurring-label {
+          text-align: right;
+          font-size: 0.8rem;
+          color: #888;
+          margin-top: 4px;
+        }
+        
+        .quote-trial-notice {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 1rem;
+          background: rgba(79, 183, 179, 0.1);
+          border: 1px solid rgba(79, 183, 179, 0.3);
+          border-radius: 6px;
+          font-size: 0.85rem;
+          color: #aaa;
+          line-height: 1.5;
+        }
+        
+        .quote-trial-notice svg {
+          flex-shrink: 0;
+          color: #4fb7b3;
+          margin-top: 2px;
+        }
+
+        /* Mini Quote Bar */
+        .mini-quote-bar {
+          display: flex;
+          justify-content: center;
+          gap: 2rem;
+          padding: 10px 16px;
+          background: rgba(0, 0, 0, 0.4);
+          border: 1px solid #333;
+          border-radius: 6px;
+          margin-bottom: 1.5rem;
+        }
+        
+        .mini-quote-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .mini-quote-label {
+          color: #888;
+          font-size: 0.85rem;
+        }
+        
+        .mini-quote-amount {
+          color: white;
+          font-weight: 600;
+          font-family: var(--font-heading);
+        }
+
+        /* Summary Details */
+        .wizard-summary-details {
+          background: rgba(0, 0, 0, 0.2);
+          border: 1px solid #333;
+          border-radius: 6px;
+          padding: 1rem;
+          margin-bottom: 1.5rem;
+        }
+        
+        .summary-row {
+          display: flex;
+          justify-content: space-between;
+          padding: 8px 0;
+          border-bottom: 1px solid #222;
+        }
+        
+        .summary-row:last-child {
+          border-bottom: none;
+        }
+        
+        .summary-label {
+          color: #888;
+        }
+        
+        .summary-value {
+          color: white;
+          font-weight: 500;
+        }
+
+        /* Plan Type Grid */
+        .wizard-plan-type-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+          gap: 1.5rem;
+        }
+        
+        .wizard-plan-type-card {
+          background: rgba(0, 0, 0, 0.3);
+          border: 2px solid #333;
+          border-radius: 12px;
+          padding: 1.5rem;
+          text-align: left;
+          transition: all 0.3s ease;
+          cursor: pointer;
+        }
+        
+        .wizard-plan-type-card:hover {
+          border-color: #555;
+          transform: translateY(-2px);
+        }
+        
+        .wizard-plan-type-card.selected {
+          border-color: var(--accent-red);
+          background: rgba(255, 26, 26, 0.1);
+        }
+        
+        .plan-type-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 1rem;
+        }
+        
+        .plan-type-name {
+          font-size: 1.2rem;
+          font-weight: 600;
+          color: white;
+        }
+        
+        .plan-type-badge {
+          font-size: 0.7rem;
+          padding: 4px 8px;
+          background: var(--accent-red);
+          color: white;
+          border-radius: 4px;
+          text-transform: uppercase;
+        }
+        
+        .plan-type-price {
+          margin-bottom: 1rem;
+        }
+        
+        .plan-type-amount {
+          font-size: 2rem;
+          font-weight: bold;
+          color: white;
+          font-family: var(--font-heading);
+        }
+        
+        .plan-type-period {
+          color: #888;
+          font-size: 0.9rem;
+        }
+        
+        .plan-type-features {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+        
+        .plan-type-features li {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #ccc;
+          font-size: 0.9rem;
+          margin-bottom: 8px;
+        }
+        
+        .plan-type-features li svg {
+          color: var(--accent-red);
+        }
+
+        /* Streaming Plan Improvements */
+        .wizard-streaming-highlight {
+          margin-top: 1rem;
+          padding: 8px 12px;
+          background: rgba(79, 183, 179, 0.1);
+          border-radius: 4px;
+          font-size: 0.8rem;
+          color: #4fb7b3;
+          text-align: center;
+        }
+        
+        .wizard-streaming-support {
+          color: #888;
+          font-size: 0.85rem;
+          margin-bottom: 1rem;
+        }
+
+        /* Addon Included State */
+        .wizard-addon-included {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          padding: 1.5rem;
+          background: rgba(79, 183, 179, 0.1);
+          border: 1px solid rgba(79, 183, 179, 0.3);
+          border-radius: 8px;
+        }
+        
+        .addon-included-icon {
+          color: #4fb7b3;
+        }
+        
+        .addon-included-content h4 {
+          color: white;
+          margin-bottom: 4px;
+        }
+        
+        .addon-included-content p {
+          color: #888;
+          font-size: 0.9rem;
+          margin: 0;
+        }
+        
+        .addon-included-check {
+          color: #4fb7b3;
+          margin-left: auto;
+        }
+
+        /* Firestick Info */
+        .wizard-firestick-info {
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid #333;
+          border-radius: 6px;
+          padding: 1rem;
+          margin: 1rem 0;
+        }
+        
+        .wizard-firestick-info p {
+          color: #aaa;
+          font-size: 0.9rem;
+          margin: 0;
+          line-height: 1.5;
+        }
+
+        /* Firestick Recommended Badge */
+        .wizard-firestick-card.recommended {
+          border-color: #4fb7b3;
+        }
+        
+        .firestick-recommended-badge {
+          position: absolute;
+          top: -8px;
+          right: 12px;
+          background: #4fb7b3;
+          color: #000;
+          font-size: 0.7rem;
+          font-weight: bold;
+          padding: 2px 8px;
+          border-radius: 3px;
+          text-transform: uppercase;
+        }
+        
+        .wizard-firestick-card {
+          position: relative;
+        }
+        
+        .wizard-firestick-desc {
+          color: #888;
+          font-size: 0.8rem;
+          margin-bottom: 8px;
+        }
+
+        /* Billing Option Improvements */
+        .wizard-billing-desc {
+          display: block;
+          font-size: 0.8rem;
+          color: #888;
+          margin-top: 4px;
+        }
+        
+        .wizard-billing-badge {
+          display: inline-block;
+          margin-top: 8px;
+          padding: 4px 10px;
+          background: #4fb7b3;
+          color: #000;
+          font-size: 0.75rem;
+          font-weight: bold;
+          border-radius: 4px;
+        }
+      `}</style>
     </section>
   );
 };
