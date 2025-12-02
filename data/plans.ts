@@ -299,7 +299,7 @@ export const TRIAL_COPY = {
 // ============ LEGACY EXPORTS FOR BACKWARDS COMPATIBILITY ============
 
 // These are kept for any components that might still reference the old structure
-export type CountryTier = TvCountryTier extends 'cheap' ? 'standard' : 'premium';
+export type CountryTier = 'standard' | 'premium';
 
 export type Country = {
   id: string;

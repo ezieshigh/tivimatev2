@@ -102,6 +102,13 @@ function round2(n: number): number {
 }
 
 /**
+ * Clamp a number to non-negative (avoid negative totals in edge cases)
+ */
+function clampNonNegative(n: number): number {
+  return n < 0 ? 0 : n;
+}
+
+/**
  * Get Firestick by ID
  */
 function getFirestick(id: FirestickId) {
@@ -548,14 +555,14 @@ function applyBundleDiscount(lines: LineItem[]): void {
   for (const line of lines) {
     if (line.type === 'installation' && line.section === 'due') {
       if (line.key.includes('remote')) {
-        // Remote: 100% off
+        // Remote: use configured discount (currently 100% off)
         if (!line.originalAmount) {
           line.originalAmount = line.amount;
         }
-        line.amount = 0;
+        line.amount = round2(line.originalAmount * (1 - BUNDLE_DISCOUNTS.remoteInstallDiscount));
         line.reason = 'Bundle TV + HUB';
       } else if (line.key.includes('callout')) {
-        // Callout: 50% off
+        // Callout: use configured discount (currently 50% off)
         if (!line.originalAmount) {
           line.originalAmount = line.amount;
         }
@@ -595,26 +602,25 @@ function applyThresholdDiscount(lines: LineItem[], threshold: number): void {
  * Apply seasonal promo (e.g., Christmas -20%)
  */
 function applySeasonalPromo(
-  lines: LineItem[], 
-  adjustments: Adjustment[], 
+  lines: LineItem[],
+  adjustments: Adjustment[],
   percentOff: number
 ): void {
   for (const line of lines) {
     // Only apply to first-month subscription items in due section
     if (
-      line.type === 'subscription' && 
-      line.section === 'due' && 
+      line.type === 'subscription' &&
+      line.section === 'due' &&
       line.key.includes('first-month')
     ) {
-      const originalAmount = line.originalAmount ?? line.amount;
-      const discount = round2(originalAmount * percentOff);
-      
+      // We want the seasonal discount to apply to the current effective price
+      const currentPrice = line.amount;
+      const discount = round2(currentPrice * percentOff);
+      // Preserve originalAmount as the price before any seasonal promo
       if (!line.originalAmount) {
-        line.originalAmount = line.amount;
+        line.originalAmount = currentPrice;
       }
-      line.amount = round2(line.amount - discount);
-      
-      // Append reason
+      line.amount = clampNonNegative(round2(currentPrice - discount));
       const promoReason = CHRISTMAS_PROMO.shortLabel;
       if (line.reason) {
         line.reason = `${line.reason}, ${promoReason}`;
